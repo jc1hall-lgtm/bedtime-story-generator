@@ -624,13 +624,30 @@ export default function StoryScreen() {
       <SafeAreaView style={styles.safe}>
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.audioCard}>
-            <Text style={styles.audioTitle}>
-              Read it yourself or play narration
-            </Text>
-            <Text style={styles.audioHelper}>
-              The app can narrate the story with a soft bedtime sound in the
-              background.
-            </Text>
+            <View style={styles.audioCardHeader}>
+              <View style={styles.audioCardTitles}>
+                <Text style={styles.audioTitle}>
+                  Read it yourself or play narration
+                </Text>
+                <Text style={styles.audioHelper}>
+                  The app can narrate the story with a soft bedtime sound in the
+                  background.
+                </Text>
+              </View>
+              <Pressable
+                onPress={toggleFavorite}
+                disabled={!isReady}
+                style={({ pressed }) => [
+                  styles.starBtn,
+                  !isReady && styles.disabledBtn,
+                  pressed && isReady && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.starIcon, isFavorite && styles.starIconActive]}>
+                  {isFavorite ? "★" : "☆"}
+                </Text>
+              </Pressable>
+            </View>
 
             <Pressable
               onPress={playNarration}
@@ -675,26 +692,6 @@ export default function StoryScreen() {
                 {p}
               </Text>
             ))}
-          </View>
-
-          <View style={styles.storyActionsCard}>
-            <Text style={styles.storyActionsText}>
-              Want to keep this one for later?
-            </Text>
-
-            <Pressable
-              onPress={toggleFavorite}
-              disabled={!isReady}
-              style={({ pressed }) => [
-                styles.secondaryActionBtnLarge,
-                !isReady && styles.disabledBtn,
-                pressed && isReady && styles.pressed,
-              ]}
-            >
-              <Text style={styles.secondaryActionTextLarge}>
-                {isFavorite ? "Saved ★" : "Save story ☆"}
-              </Text>
-            </Pressable>
           </View>
 
           {canContinueAdventure ? (
@@ -774,6 +771,15 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     ...BedtimeTheme.shadow.card,
   },
+  audioCardHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  audioCardTitles: {
+    flex: 1,
+    marginRight: 10,
+  },
   audioTitle: {
     color: BedtimeTheme.colors.text,
     fontSize: 16,
@@ -784,6 +790,17 @@ const styles = StyleSheet.create({
     color: BedtimeTheme.colors.textMuted,
     fontSize: 12.5,
     lineHeight: 17,
+  },
+  starBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  starIcon: {
+    fontSize: 24,
+    color: BedtimeTheme.colors.textMuted,
+  },
+  starIconActive: {
+    color: BedtimeTheme.colors.accent,
   },
   audioActions: {
     flexDirection: "row",
@@ -870,22 +887,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  storyActionsCard: {
-    backgroundColor: BedtimeTheme.colors.card,
-    borderWidth: 1,
-    borderColor: BedtimeTheme.colors.cardBorder,
-    borderRadius: BedtimeTheme.radius.xl,
-    padding: 14,
-    marginTop: -2,
-    marginBottom: 14,
-    ...BedtimeTheme.shadow.card,
-  },
-  storyActionsText: {
-    color: BedtimeTheme.colors.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 10,
-  },
   secondaryActionBtnLarge: {
     backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,

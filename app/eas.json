@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "production": {
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "jc1hall@gmail.com",
+        "ascAppId": "FILL_IN_FROM_APP_STORE_CONNECT",
+        "appleTeamId": "FILL_IN_FROM_DEVELOPER_PORTAL"
+      }
+    }
+  }
+}

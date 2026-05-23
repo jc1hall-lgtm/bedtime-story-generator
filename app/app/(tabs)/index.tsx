@@ -15,6 +15,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Chip } from "@/components/chip";
+import { useRecentStories } from "../../lib/recentStoriesStore";
+import { SAMPLE_STORY } from "../../lib/sampleStory";
 import { useStoryStore } from "../../lib/storyStore";
 import { BedtimeTheme } from "../../lib/theme";
 
@@ -99,7 +101,8 @@ function ThemeGrid({
 }
 
 export default function HomeScreen() {
-  const { setDraft } = useStoryStore();
+  const { setDraft, setStory } = useStoryStore();
+  const { items: recentItems, isReady: recentsReady } = useRecentStories();
 
   const [name, setName] = useState("");
   const [theme, setTheme] = useState<Theme>("Animals");
@@ -184,6 +187,27 @@ export default function HomeScreen() {
                 screen.
               </Text>
             </View>
+
+            {recentsReady && recentItems.length === 0 ? (
+              <View style={styles.sampleCard}>
+                <Text style={styles.sampleTitle}>Try a sample story</Text>
+                <Text style={styles.sampleSubtitle}>
+                  Hear a pre-written bedtime story — no setup needed.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    setStory(SAMPLE_STORY);
+                    router.push("/story");
+                  }}
+                  style={({ pressed }) => [
+                    styles.sampleBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.sampleBtnText}>▶ Hear a sample story</Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Step 1 of 2</Text>
@@ -399,5 +423,38 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.9,
+  },
+  sampleCard: {
+    marginTop: 6,
+    marginBottom: 12,
+    backgroundColor: BedtimeTheme.colors.card,
+    borderWidth: 1,
+    borderColor: BedtimeTheme.colors.cardBorder,
+    borderRadius: BedtimeTheme.radius.xl,
+    padding: 16,
+    ...BedtimeTheme.shadow.card,
+  },
+  sampleTitle: {
+    color: BedtimeTheme.colors.text,
+    fontSize: 16,
+    fontWeight: "900",
+    marginBottom: 6,
+  },
+  sampleSubtitle: {
+    color: BedtimeTheme.colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  sampleBtn: {
+    backgroundColor: BedtimeTheme.colors.button,
+    borderRadius: 999,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  sampleBtnText: {
+    color: BedtimeTheme.colors.buttonText,
+    fontWeight: "900",
+    fontSize: 14,
   },
 });

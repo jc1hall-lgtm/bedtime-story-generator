@@ -1,4 +1,7 @@
 import Slider from "@react-native-community/slider";
+import { Buffer } from "buffer";
+import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +16,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -24,6 +28,12 @@ import { buildSeriesId, useStorySeries } from "../lib/storySeriesStore";
 import { API_BASE_URL } from "../lib/api";
 import { useStoryStore } from "../lib/storyStore";
 import { BedtimeTheme } from "../lib/theme";
+import {
+  incrementStoryCount,
+  markPrompted,
+  shouldRequestReview,
+} from "../lib/storyCountStore";
+import * as StoreReview from "expo-store-review";
 
 type AgeGroup = "3-5" | "6-8" | "9-12";
 type Length = "Short" | "Medium" | "Long";
@@ -65,7 +75,11 @@ export default function StoryDetailsScreen() {
     add: addFavoriteCharacter,
     remove: removeFavoriteCharacter,
   } = useFavoriteCharacters();
-  const { upsertSeries } = useStorySeries();
+  const {
+    upsertSeries,
+    items: seriesItems,
+    isReady: seriesReady,
+  } = useStorySeries();
 
   const [age, setAge] = useState<AgeGroup>("3-5");
   const [length, setLength] = useState<Length>("Short");
@@ -82,6 +96,20 @@ export default function StoryDetailsScreen() {
   const [isSavingFavorite, setIsSavingFavorite] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
 
+  // Feature 9: Late night nudge
+  const [lateNightNudge, setLateNightNudge] = useState(false);
+
+  // Feature 10: Slow warning
+  const [showSlowWarning, setShowSlowWarning] = useState(false);
+  const slowWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Feature 4: Voice preview
+  const [previewingVoice, setPreviewingVoice] = useState<ReaderVoice | null>(null);
+  const voicePreviewRef = useRef<Audio.Sound | null>(null);
+
+  // Feature 5: Continue adventure
+  const [continueAdventure, setContinueAdventure] = useState(false);
+
   // ── Cancel in-flight request when the app is backgrounded ─────────────────
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
@@ -90,9 +118,31 @@ export default function StoryDetailsScreen() {
         abortControllerRef.current?.abort();
         setIsGenerating(false);
         setLoadingMessageIndex(0);
+        setShowSlowWarning(false);
+        if (slowWarningTimerRef.current) {
+          clearTimeout(slowWarningTimerRef.current);
+          slowWarningTimerRef.current = null;
+        }
       }
     });
     return () => subscription.remove();
+  }, []);
+
+  // Feature 9: Late night nudge on mount
+  useEffect(() => {
+    const hour = new Date().getHours();
+    if (hour >= 21) {
+      setLengthValue(0); // Short
+      setLateNightNudge(true);
+    }
+  }, []);
+
+  // Feature 4: Audio mode on mount + cleanup
+  useEffect(() => {
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+    return () => {
+      void safeUnloadVoicePreview();
+    };
   }, []);
 
   useEffect(() => {
@@ -155,13 +205,28 @@ export default function StoryDetailsScreen() {
     [childName, resolvedTheme, resolvedCharacterType, characterTrait, trimmedCharacterItem]
   );
 
+  // Feature 5: existingSeries and hasPriorEpisodes
+  const existingSeries = useMemo(
+    () =>
+      seriesReady
+        ? (seriesItems.find((s) => s.id === seriesId) ?? null)
+        : null,
+    [seriesReady, seriesItems, seriesId]
+  );
+
+  const hasPriorEpisodes = (existingSeries?.episodes?.length ?? 0) > 0;
+
+  // Feature 5: Reset continueAdventure when seriesId changes
+  useEffect(() => {
+    setContinueAdventure(false);
+  }, [seriesId]);
+
   const isFavoriteCharacter =
     favoriteCharactersReady &&
     !!childName &&
     favoriteCharacterIds.has(characterId);
 
   // ── Favorite character ──────────────────────────────────────────────────────
-  // isSavingFavorite prevents double-taps while the async op is in flight.
   const toggleFavoriteCharacter = useCallback(async () => {
     if (!favoriteCharactersReady || !childName || isSavingFavorite) return;
 
@@ -195,174 +260,336 @@ export default function StoryDetailsScreen() {
     removeFavoriteCharacter,
   ]);
 
-  // ── Story generation ────────────────────────────────────────────────────────
-  // useRef tracks whether a generation is in flight so handleGenerate can be
-  // safely called from the Alert retry callback without stale closure issues.
-  const isGeneratingRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  // Set to true when the OS backgrounds the app mid-request so we can cancel
-  // silently instead of showing an error alert the user didn't ask for.
-  const cancelledByBackgroundRef = useRef(false);
+  // Feature 4: Voice preview helpers
+  async function safeUnloadVoicePreview() {
+    if (voicePreviewRef.current) {
+      try {
+        await voicePreviewRef.current.stopAsync();
+      } catch {}
+      try {
+        await voicePreviewRef.current.unloadAsync();
+      } catch {}
+      voicePreviewRef.current = null;
+    }
+    setPreviewingVoice(null);
+  }
 
-  const handleGenerate = useCallback(async () => {
-    if (isGeneratingRef.current) return;
-
-    if (!childName) {
-      Alert.alert("Missing setup", "Please go back and enter the child's name.");
+  async function playVoicePreview(voice: ReaderVoice) {
+    if (previewingVoice === voice) {
+      await safeUnloadVoicePreview();
       return;
     }
 
-    isGeneratingRef.current = true;
-    cancelledByBackgroundRef.current = false;
-    setIsGenerating(true);
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
+    await safeUnloadVoicePreview();
+    setPreviewingVoice(voice);
 
     try {
-      const resp = await fetch(`${API_BASE_URL}/generate`, {
+      const resp = await fetch(`${API_BASE_URL}/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          childName,
-          ageGroup: age,
-          theme,
-          length,
-          pronounsMode,
-          customTheme,
-          readerVoice,
-          calmStoryType,
-          character: {
-            type: resolvedCharacterType,
-            trait: characterTrait,
-            item: trimmedCharacterItem,
-          },
-          continueAdventure: false,
-          storySeries: null,
+          text: "Once upon a time, beneath a sky full of quiet stars, a little explorer set out on the gentlest of adventures.",
+          voice,
+          format: "mp3",
         }),
-        signal: controller.signal,
       });
 
-      if (!resp.ok) {
-        const msg = await resp.text().catch(() => "");
-        throw new Error(`Generate failed (${resp.status}): ${msg}`);
-      }
+      if (!resp.ok) throw new Error("TTS failed");
 
-      const data = await resp.json();
+      const audioData = await resp.arrayBuffer();
+      const tmpFile =
+        (FileSystem.cacheDirectory || "") + `voice-preview-${voice}.mp3`;
 
-      const nextEpisodeSummary =
-        typeof data?.episodeSummary === "string" && data.episodeSummary.trim()
-          ? data.episodeSummary.trim()
-          : "";
-
-      const updatedSeries = await upsertSeries(
-        {
-          id: seriesId,
-          childName,
-          theme: resolvedTheme,
-          characterType: resolvedCharacterType,
-          characterTrait,
-          characterItem: trimmedCharacterItem,
-          pronounsMode,
-          age,
-          length,
-          readerVoice,
-          calmStoryType,
-        },
-        {
-          title: data.title,
-          story: data.story,
-          summary: nextEpisodeSummary,
-          episodeSummary: nextEpisodeSummary,
-          storyEngine: data?.meta?.storyEngine,
-          settingSeed: data?.meta?.settingSeed,
-          openingStyle: data?.meta?.openingStyle,
-          wonderSeed: data?.meta?.wonderSeed,
-          companionSeed: data?.meta?.companionSeed,
-        }
+      await FileSystem.writeAsStringAsync(
+        tmpFile,
+        Buffer.from(audioData).toString("base64"),
+        { encoding: "base64" }
       );
 
-      const storyPayload = {
-        title: data.title,
-        story: data.story,
-        meta: {
-          childName,
-          age,
-          theme: resolvedTheme,
-          length,
-          pronounsMode,
-          readerVoice,
-          calmStoryType,
-          character: {
-            type: resolvedCharacterType,
-            trait: characterTrait,
-            item: trimmedCharacterItem,
-          },
-          storyEngine: data?.meta?.storyEngine,
-          settingSeed: data?.meta?.settingSeed,
-          openingStyle: data?.meta?.openingStyle,
-          wonderSeed: data?.meta?.wonderSeed,
-          companionSeed: data?.meta?.companionSeed,
-          series: {
-            id: updatedSeries.id,
-            episodeNumber: updatedSeries.latestEpisodeNumber,
-            latestSummary: updatedSeries.latestSummary,
-            episodes: updatedSeries.episodes,
-          },
-        },
-      };
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: tmpFile },
+        { shouldPlay: true }
+      );
 
-      // Use a timestamp + random suffix so each story gets a unique recent ID,
-      // even if the same child/theme/length/title combination is generated again.
-      const recentId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      voicePreviewRef.current = sound;
 
-      await addRecent({
-        id: recentId,
-        createdAt: Date.now(),
-        title: storyPayload.title,
-        story: storyPayload.story,
-        meta: storyPayload.meta ?? {},
+      sound.setOnPlaybackStatusUpdate((status: any) => {
+        if (status?.didJustFinish) {
+          void safeUnloadVoicePreview();
+        }
       });
-
-      setStory(storyPayload);
-      router.replace("/story");
-    } catch (e: any) {
-      if (!cancelledByBackgroundRef.current) {
-        const message =
-          e?.name === "AbortError"
-            ? "The story is taking too long. Please try again."
-            : e?.message || "Something went wrong. Please try again.";
-
-        Alert.alert("Story error", message, [
-          { text: "Cancel", style: "cancel" },
-          { text: "Retry", onPress: handleGenerate },
-        ]);
-      }
-    } finally {
-      clearTimeout(timeoutId);
-      abortControllerRef.current = null;
-      isGeneratingRef.current = false;
-      setIsGenerating(false);
+    } catch {
+      setPreviewingVoice(null);
     }
+  }
+
+  // ── Story generation ────────────────────────────────────────────────────────
+  const isGeneratingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const cancelledByBackgroundRef = useRef(false);
+
+  // Core generate logic extracted so both handleGenerate and handleQuickStory can use it
+  const runGenerate = useCallback(
+    async (params: {
+      ageParam: AgeGroup;
+      lengthParam: Length;
+      pronounsModeParam: PronounsMode;
+      readerVoiceParam: ReaderVoice;
+      resolvedCharacterTypeParam: string;
+      characterTraitParam: CharacterTrait;
+      trimmedCharacterItemParam: string;
+      continueAdventureParam: boolean;
+      existingSeriesParam: typeof existingSeries;
+    }) => {
+      if (isGeneratingRef.current) return;
+
+      if (!childName) {
+        Alert.alert("Missing setup", "Please go back and enter the child's name.");
+        return;
+      }
+
+      isGeneratingRef.current = true;
+      cancelledByBackgroundRef.current = false;
+      setIsGenerating(true);
+
+      // Feature 10: slow warning timer
+      slowWarningTimerRef.current = setTimeout(
+        () => setShowSlowWarning(true),
+        20000
+      );
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+      const {
+        ageParam,
+        lengthParam,
+        pronounsModeParam,
+        readerVoiceParam,
+        resolvedCharacterTypeParam,
+        characterTraitParam,
+        trimmedCharacterItemParam,
+        continueAdventureParam,
+        existingSeriesParam,
+      } = params;
+
+      try {
+        const storeSeries =
+          continueAdventureParam && existingSeriesParam
+            ? {
+                id: existingSeriesParam.id,
+                latestEpisodeNumber: existingSeriesParam.latestEpisodeNumber,
+                latestSummary: existingSeriesParam.latestSummary,
+                episodes: existingSeriesParam.episodes.slice(-5).map((ep) => ({
+                  title: ep.title,
+                  story: ep.story,
+                  summary: ep.summary ?? ep.episodeSummary ?? "",
+                  episodeSummary: ep.episodeSummary ?? ep.summary ?? "",
+                  storyEngine: ep.storyEngine,
+                  settingSeed: ep.settingSeed,
+                  openingStyle: ep.openingStyle,
+                  wonderSeed: ep.wonderSeed,
+                  companionSeed: ep.companionSeed,
+                })),
+              }
+            : null;
+
+        const resp = await fetch(`${API_BASE_URL}/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            childName,
+            ageGroup: ageParam,
+            theme,
+            length: lengthParam,
+            pronounsMode: pronounsModeParam,
+            customTheme,
+            readerVoice: readerVoiceParam,
+            calmStoryType,
+            character: {
+              type: resolvedCharacterTypeParam,
+              trait: characterTraitParam,
+              item: trimmedCharacterItemParam,
+            },
+            continueAdventure: continueAdventureParam,
+            storySeries: storeSeries,
+          }),
+          signal: controller.signal,
+        });
+
+        if (!resp.ok) {
+          const msg = await resp.text().catch(() => "");
+          throw new Error(`Generate failed (${resp.status}): ${msg}`);
+        }
+
+        const data = await resp.json();
+
+        const nextEpisodeSummary =
+          typeof data?.episodeSummary === "string" && data.episodeSummary.trim()
+            ? data.episodeSummary.trim()
+            : "";
+
+        const updatedSeries = await upsertSeries(
+          {
+            id: seriesId,
+            childName,
+            theme: resolvedTheme,
+            characterType: resolvedCharacterTypeParam,
+            characterTrait: characterTraitParam,
+            characterItem: trimmedCharacterItemParam,
+            pronounsMode: pronounsModeParam,
+            age: ageParam,
+            length: lengthParam,
+            readerVoice: readerVoiceParam,
+            calmStoryType,
+          },
+          {
+            title: data.title,
+            story: data.story,
+            summary: nextEpisodeSummary,
+            episodeSummary: nextEpisodeSummary,
+            storyEngine: data?.meta?.storyEngine,
+            settingSeed: data?.meta?.settingSeed,
+            openingStyle: data?.meta?.openingStyle,
+            wonderSeed: data?.meta?.wonderSeed,
+            companionSeed: data?.meta?.companionSeed,
+          }
+        );
+
+        const storyPayload = {
+          title: data.title,
+          story: data.story,
+          meta: {
+            childName,
+            age: ageParam,
+            theme: resolvedTheme,
+            length: lengthParam,
+            pronounsMode: pronounsModeParam,
+            readerVoice: readerVoiceParam,
+            calmStoryType,
+            character: {
+              type: resolvedCharacterTypeParam,
+              trait: characterTraitParam,
+              item: trimmedCharacterItemParam,
+            },
+            storyEngine: data?.meta?.storyEngine,
+            settingSeed: data?.meta?.settingSeed,
+            openingStyle: data?.meta?.openingStyle,
+            wonderSeed: data?.meta?.wonderSeed,
+            companionSeed: data?.meta?.companionSeed,
+            series: {
+              id: updatedSeries.id,
+              episodeNumber: updatedSeries.latestEpisodeNumber,
+              latestSummary: updatedSeries.latestSummary,
+              episodes: updatedSeries.episodes,
+            },
+          },
+        };
+
+        const recentId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        await addRecent({
+          id: recentId,
+          createdAt: Date.now(),
+          title: storyPayload.title,
+          story: storyPayload.story,
+          meta: storyPayload.meta ?? {},
+        });
+
+        // Feature 8: Rating prompt
+        await incrementStoryCount();
+        if (await shouldRequestReview()) {
+          const available = await StoreReview.isAvailableAsync();
+          if (available) {
+            await StoreReview.requestReview();
+            await markPrompted();
+          }
+        }
+
+        setStory(storyPayload);
+        router.replace("/story");
+      } catch (e: any) {
+        if (!cancelledByBackgroundRef.current) {
+          const message =
+            e?.name === "AbortError"
+              ? "The story is taking too long. Please try again."
+              : e?.message || "Something went wrong. Please try again.";
+
+          Alert.alert("Story error", message, [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Retry",
+              onPress: () =>
+                runGenerate(params),
+            },
+          ]);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        abortControllerRef.current = null;
+        isGeneratingRef.current = false;
+        setIsGenerating(false);
+        // Feature 10: clear slow warning
+        if (slowWarningTimerRef.current) {
+          clearTimeout(slowWarningTimerRef.current);
+          slowWarningTimerRef.current = null;
+        }
+        setShowSlowWarning(false);
+      }
+    },
+    [
+      childName,
+      theme,
+      customTheme,
+      calmStoryType,
+      seriesId,
+      resolvedTheme,
+      upsertSeries,
+      addRecent,
+      setStory,
+    ]
+  );
+
+  const handleGenerate = useCallback(async () => {
+    await runGenerate({
+      ageParam: age,
+      lengthParam: length,
+      pronounsModeParam: pronounsMode,
+      readerVoiceParam: readerVoice,
+      resolvedCharacterTypeParam: resolvedCharacterType,
+      characterTraitParam: characterTrait,
+      trimmedCharacterItemParam: trimmedCharacterItem,
+      continueAdventureParam: continueAdventure,
+      existingSeriesParam: existingSeries,
+    });
   }, [
-    childName,
+    runGenerate,
     age,
-    theme,
     length,
     pronounsMode,
-    customTheme,
     readerVoice,
-    calmStoryType,
     resolvedCharacterType,
     characterTrait,
     trimmedCharacterItem,
-    seriesId,
-    resolvedTheme,
-    upsertSeries,
-    addRecent,
-    setStory,
+    continueAdventure,
+    existingSeries,
   ]);
+
+  // Feature 3: Quick Story
+  const handleQuickStory = useCallback(async () => {
+    await runGenerate({
+      ageParam: "3-5",
+      lengthParam: "Short",
+      pronounsModeParam: "neutral",
+      readerVoiceParam: "shimmer",
+      resolvedCharacterTypeParam: "Explorer",
+      characterTraitParam: "Curious",
+      trimmedCharacterItemParam: "",
+      continueAdventureParam: false,
+      existingSeriesParam: null,
+    });
+  }, [runGenerate]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -405,6 +632,40 @@ export default function StoryDetailsScreen() {
                 Fine-tune the character, voice, and story style before you
                 generate it.
               </Text>
+            </View>
+
+            {/* Feature 2: Context recap bar */}
+            <View style={styles.recapBar}>
+              <Text style={styles.recapText}>
+                {childName}
+                {childName ? " · " : ""}
+                {theme === "Custom" ? customTheme || "Custom" : theme}
+                {" · "}
+                {calmStoryType}
+              </Text>
+            </View>
+
+            {/* Feature 3: Quick Story card */}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Quick Story ⚡</Text>
+              <Text style={styles.quickSubtitle}>
+                Skip the details — we'll pick sensible defaults and start right away.
+              </Text>
+              <Pressable
+                onPress={handleQuickStory}
+                disabled={isGenerating}
+                style={({ pressed }) => [
+                  styles.quickBtn,
+                  isGenerating && styles.disabledBtn,
+                  pressed && !isGenerating && styles.pressed,
+                ]}
+              >
+                {isGenerating ? (
+                  <ActivityIndicator color={BedtimeTheme.colors.buttonText} />
+                ) : (
+                  <Text style={styles.primaryText}>Generate Quick Story</Text>
+                )}
+              </Pressable>
             </View>
 
             <View style={styles.card}>
@@ -503,6 +764,24 @@ export default function StoryDetailsScreen() {
                   </Text>
                 )}
               </Pressable>
+
+              {/* Feature 5: Continue adventure toggle */}
+              {hasPriorEpisodes ? (
+                <View style={styles.continueRow}>
+                  <View style={styles.continueTextWrap}>
+                    <Text style={styles.continueLabel}>Continue the adventure</Text>
+                    <Text style={styles.continueHint}>
+                      Pick up where the last story left off
+                    </Text>
+                  </View>
+                  <Switch
+                    value={continueAdventure}
+                    onValueChange={setContinueAdventure}
+                    trackColor={{ false: undefined, true: BedtimeTheme.colors.accent }}
+                    thumbColor={BedtimeTheme.colors.text}
+                  />
+                </View>
+              ) : null}
 
               <View style={styles.divider} />
 
@@ -613,20 +892,45 @@ export default function StoryDetailsScreen() {
                       ? "Medium • about 5 minutes"
                       : "Long • about 8 minutes"}
                 </Text>
+                {/* Feature 9: Late night nudge */}
+                {lateNightNudge ? (
+                  <Text style={styles.lateNightNudge}>
+                    It's getting late — we've set a shorter story for tonight 🌙
+                  </Text>
+                ) : null}
               </View>
 
+              {/* Feature 4: Reader voice with preview buttons */}
               <Text style={[styles.label, { marginTop: 16 }]}>Reader voice</Text>
-              <View style={styles.row}>
+              <View style={styles.voiceRow}>
                 <Chip
                   label="Female voice"
                   selected={readerVoice === "shimmer"}
                   onPress={() => setReaderVoice("shimmer")}
                 />
+                <Pressable
+                  onPress={() => playVoicePreview("shimmer")}
+                  style={styles.previewBtn}
+                >
+                  <Text style={styles.previewBtnText}>
+                    {previewingVoice === "shimmer" ? "⏹" : "▶"}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={[styles.voiceRow, { marginTop: 8 }]}>
                 <Chip
                   label="Male voice"
                   selected={readerVoice === "onyx"}
                   onPress={() => setReaderVoice("onyx")}
                 />
+                <Pressable
+                  onPress={() => playVoicePreview("onyx")}
+                  style={styles.previewBtn}
+                >
+                  <Text style={styles.previewBtnText}>
+                    {previewingVoice === "onyx" ? "⏹" : "▶"}
+                  </Text>
+                </Pressable>
               </View>
 
               <View style={styles.actionRow}>
@@ -661,6 +965,21 @@ export default function StoryDetailsScreen() {
                 <Text style={styles.loadingMessage}>
                   {LOADING_MESSAGES[loadingMessageIndex]}
                 </Text>
+              ) : null}
+
+              {/* Feature 10: Slow warning */}
+              {isGenerating && showSlowWarning ? (
+                <View style={styles.slowWarningRow}>
+                  <Text style={styles.slowWarningText}>
+                    This is taking longer than usual. Hang tight…
+                  </Text>
+                  <Pressable
+                    onPress={() => abortControllerRef.current?.abort()}
+                    style={styles.cancelBtn}
+                  >
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </Pressable>
+                </View>
               ) : null}
             </View>
           </ScrollView>
@@ -718,6 +1037,23 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 20,
   },
+  // Feature 2: Recap bar
+  recapBar: {
+    backgroundColor: "rgba(185,166,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(185,166,255,0.35)",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  recapText: {
+    color: BedtimeTheme.colors.textMuted,
+    fontSize: 13,
+    fontWeight: "700",
+  },
   card: {
     marginTop: 6,
     backgroundColor: BedtimeTheme.colors.card,
@@ -726,6 +1062,21 @@ const styles = StyleSheet.create({
     borderRadius: BedtimeTheme.radius.xl,
     padding: 16,
     ...BedtimeTheme.shadow.card,
+  },
+  // Feature 3: Quick Story
+  quickSubtitle: {
+    color: BedtimeTheme.colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  quickBtn: {
+    backgroundColor: BedtimeTheme.colors.button,
+    borderRadius: 999,
+    paddingVertical: 14,
+    alignItems: "center",
+    minHeight: 52,
+    justifyContent: "center",
   },
   sectionTitle: {
     color: BedtimeTheme.colors.text,
@@ -772,6 +1123,28 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     fontSize: 14,
   },
+  // Feature 5: Continue adventure
+  continueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 14,
+    paddingVertical: 4,
+  },
+  continueTextWrap: {
+    flex: 1,
+    marginRight: 12,
+  },
+  continueLabel: {
+    color: BedtimeTheme.colors.text,
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  continueHint: {
+    color: BedtimeTheme.colors.textMuted,
+    fontSize: 12,
+    marginTop: 2,
+  },
   sliderWrap: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
@@ -807,6 +1180,27 @@ const styles = StyleSheet.create({
     color: BedtimeTheme.colors.textMuted,
     fontSize: 12,
     textAlign: "center",
+  },
+  // Feature 9: Late night nudge
+  lateNightNudge: {
+    marginTop: 6,
+    color: BedtimeTheme.colors.accent,
+    fontSize: 12,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+  // Feature 4: Voice preview
+  voiceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  previewBtn: {
+    paddingHorizontal: 4,
+  },
+  previewBtnText: {
+    color: BedtimeTheme.colors.accent,
+    fontSize: 16,
   },
   actionRow: {
     flexDirection: "row",
@@ -849,6 +1243,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
     fontWeight: "600",
+  },
+  // Feature 10: Slow warning
+  slowWarningRow: {
+    marginTop: 10,
+    alignItems: "center",
+    gap: 8,
+  },
+  slowWarningText: {
+    color: BedtimeTheme.colors.textMuted,
+    fontSize: 12,
+    textAlign: "center",
+  },
+  cancelBtn: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: BedtimeTheme.colors.cardBorder,
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+  },
+  cancelBtnText: {
+    color: BedtimeTheme.colors.text,
+    fontWeight: "700",
+    fontSize: 13,
   },
   disabledBtn: {
     opacity: 0.5,

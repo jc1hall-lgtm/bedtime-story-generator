@@ -46,6 +46,16 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      <Tabs.Screen
+        name="history"
+        options={{
+          title: "Library",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="rectangle.stack.fill" color={color} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
