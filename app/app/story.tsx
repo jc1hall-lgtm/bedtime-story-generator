@@ -551,6 +551,10 @@ export default function StoryScreen() {
       clearFadeTimer();
       void stopNarration();
       void safeUnload(bedRef.current);
+      for (const uri of chunkCacheRef.current.values()) {
+        void FileSystem.deleteAsync(uri, { idempotent: true });
+      }
+      chunkCacheRef.current.clear();
     };
   }, []);
 

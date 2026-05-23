@@ -630,6 +630,10 @@ Return JSON with exactly this shape:
 
 // ─── Routes ────────────────────────────────────────────────────────────────────
 
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.post("/generate", generateLimiter, async (req, res) => {
   let resolvedChildName    = "";
   let resolvedTheme        = "";
@@ -840,7 +844,7 @@ app.post("/generate", generateLimiter, async (req, res) => {
           },
         },
       },
-    });
+    }, { timeout: 40_000 });
 
     const raw = response.output_text;
 
@@ -978,6 +982,10 @@ app.post("/tts", ttsLimiter, async (req, res) => {
 // ─── Start ─────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+process.on("SIGTERM", () => {
+  server.close(() => process.exit(0));
 });

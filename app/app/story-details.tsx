@@ -2,6 +2,7 @@ import Slider from "@react-native-community/slider";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Chip } from "@/components/chip";
 import {
   ActivityIndicator,
   Alert,
@@ -45,31 +46,6 @@ type CharacterTrait =
   | "Smart"
   | "Adventurous";
 
-function Chip({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.chip,
-        selected && styles.chipSelected,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 // Extended loading messages — the last two appear after ~20s to manage expectations.
 const LOADING_MESSAGES = [
   "🌙 Creating your bedtime story...",
@@ -106,10 +82,12 @@ export default function StoryDetailsScreen() {
   const [isSavingFavorite, setIsSavingFavorite] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
 
-  // ── Reset isGenerating if the app is backgrounded mid-request ──────────────
+  // ── Cancel in-flight request when the app is backgrounded ─────────────────
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "background" || nextState === "inactive") {
+        cancelledByBackgroundRef.current = true;
+        abortControllerRef.current?.abort();
         setIsGenerating(false);
         setLoadingMessageIndex(0);
       }
@@ -221,6 +199,10 @@ export default function StoryDetailsScreen() {
   // useRef tracks whether a generation is in flight so handleGenerate can be
   // safely called from the Alert retry callback without stale closure issues.
   const isGeneratingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  // Set to true when the OS backgrounds the app mid-request so we can cancel
+  // silently instead of showing an error alert the user didn't ask for.
+  const cancelledByBackgroundRef = useRef(false);
 
   const handleGenerate = useCallback(async () => {
     if (isGeneratingRef.current) return;
@@ -231,9 +213,11 @@ export default function StoryDetailsScreen() {
     }
 
     isGeneratingRef.current = true;
+    cancelledByBackgroundRef.current = false;
     setIsGenerating(true);
 
     const controller = new AbortController();
+    abortControllerRef.current = controller;
     const timeoutId = setTimeout(() => controller.abort(), 45000);
 
     try {
@@ -344,17 +328,20 @@ export default function StoryDetailsScreen() {
       setStory(storyPayload);
       router.replace("/story");
     } catch (e: any) {
-      const message =
-        e?.name === "AbortError"
-          ? "The story is taking too long. Please try again."
-          : e?.message || "Something went wrong. Please try again.";
+      if (!cancelledByBackgroundRef.current) {
+        const message =
+          e?.name === "AbortError"
+            ? "The story is taking too long. Please try again."
+            : e?.message || "Something went wrong. Please try again.";
 
-      Alert.alert("Story error", message, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Retry", onPress: handleGenerate },
-      ]);
+        Alert.alert("Story error", message, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Retry", onPress: handleGenerate },
+        ]);
+      }
     } finally {
       clearTimeout(timeoutId);
+      abortControllerRef.current = null;
       isGeneratingRef.current = false;
       setIsGenerating(false);
     }
@@ -770,25 +757,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
-  },
-  chip: {
-    backgroundColor: BedtimeTheme.colors.chip,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: BedtimeTheme.colors.chipBorder,
-  },
-  chipSelected: {
-    backgroundColor: BedtimeTheme.colors.chipSelected,
-    borderColor: BedtimeTheme.colors.chipBorderSelected,
-  },
-  chipText: {
-    color: BedtimeTheme.colors.text,
-    fontWeight: "800",
-  },
-  chipTextSelected: {
-    color: BedtimeTheme.colors.text,
   },
   secondaryActionBtn: {
     marginTop: 14,

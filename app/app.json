@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "app",
-    "slug": "app",
+    "name": "Bedtime Stories",
+    "slug": "bedtime-stories",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "app",
+    "scheme": "bedtime-stories",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {

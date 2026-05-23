@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Chip } from "@/components/chip";
 import { useStoryStore } from "../../lib/storyStore";
 import { BedtimeTheme } from "../../lib/theme";
 
@@ -58,31 +59,6 @@ const STORY_THEMES: ThemeOption[] = [
   { id: "Friendship", emoji: "🤝", label: "Friends" },
   { id: "Custom", emoji: "⭐", label: "Custom" },
 ];
-
-function Chip({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.chip,
-        selected && styles.chipSelected,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
 
 function ThemeGrid({
   selected,
@@ -400,25 +376,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   themeLabelSelected: {
-    color: BedtimeTheme.colors.text,
-  },
-  chip: {
-    backgroundColor: BedtimeTheme.colors.chip,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: BedtimeTheme.colors.chipBorder,
-  },
-  chipSelected: {
-    backgroundColor: BedtimeTheme.colors.chipSelected,
-    borderColor: BedtimeTheme.colors.chipBorderSelected,
-  },
-  chipText: {
-    color: BedtimeTheme.colors.text,
-    fontWeight: "800",
-  },
-  chipTextSelected: {
     color: BedtimeTheme.colors.text,
   },
   primaryBtn: {
