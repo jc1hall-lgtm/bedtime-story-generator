@@ -8,7 +8,7 @@ import OpenAI from "openai";
 // Import pre-generated fallback stories.
 // Each entry shape: { theme, length, ageGroup, title, story, episodeSummary }
 // Use [NAME] as the child name placeholder in title/story/episodeSummary fields.
-import fallbackStories from "./fallbackStories.json" assert { type: "json" };
+import fallbackStories from "./fallbackStories.json" with { type: "json" };
 
 dotenv.config();
 
