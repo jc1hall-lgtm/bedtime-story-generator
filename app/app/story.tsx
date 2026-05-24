@@ -545,7 +545,7 @@ export default function StoryScreen() {
   }
 
   useEffect(() => {
-    Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => {});
 
     return () => {
       clearFadeTimer();

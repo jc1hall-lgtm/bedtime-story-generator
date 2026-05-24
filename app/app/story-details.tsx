@@ -139,7 +139,7 @@ export default function StoryDetailsScreen() {
 
   // Feature 4: Audio mode on mount + cleanup
   useEffect(() => {
-    Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => {});
     return () => {
       void safeUnloadVoicePreview();
     };
@@ -498,13 +498,17 @@ export default function StoryDetailsScreen() {
         });
 
         // Feature 8: Rating prompt
-        await incrementStoryCount();
-        if (await shouldRequestReview()) {
-          const available = await StoreReview.isAvailableAsync();
-          if (available) {
-            await StoreReview.requestReview();
-            await markPrompted();
+        try {
+          await incrementStoryCount();
+          if (await shouldRequestReview()) {
+            const available = await StoreReview.isAvailableAsync();
+            if (available) {
+              await StoreReview.requestReview();
+              await markPrompted();
+            }
           }
+        } catch {
+          // Rating prompt is non-critical — never let it crash the app
         }
 
         setStory(storyPayload);
